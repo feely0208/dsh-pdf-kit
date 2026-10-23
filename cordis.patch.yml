@@ -1,0 +1,4 @@
+# @deepwhale-cn/dsh-pdf-kit 的组合层：装上即注册 pdf-kit skill
+- insert:
+    - id: pdf-kit
+      name: '@deepwhale-cn/dsh-pdf-kit'
