@@ -1,19 +1,63 @@
 {
   "name": "@deepwhale-cn/dsh-pdf-kit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "PDF 合并 / 拆分 / 压缩 / 加水印 / 提取文本与图片",
   "type": "module",
   "license": "MIT",
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "skill", "tool", "pdf-kit"],
-  "files": ["lib", "bin", "skill", "cordis.patch.yml", "tests/fixtures", "README.md", "LICENSE"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "skill",
+    "tool",
+    "pdf-kit"
+  ],
+  "files": [
+    "lib",
+    "bin",
+    "skill",
+    "cordis.patch.yml",
+    "tests/fixtures",
+    "README.md",
+    "LICENSE"
+  ],
   "main": "./lib/index.js",
-  "exports": { ".": "./lib/index.js", "./package.json": "./package.json" },
-  "bin": { "dsh-pdf-kit": "./bin/cli.mjs" },
-  "engines": { "dsh": ">=0.1.0-rc.6 <0.3.0", "node": ">=18" },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
-  "dependencies": { "@deepwhale-cn/dsh-guard-core": "^0.5.1" },
-  "peerDependencies": { "@deepseek-ai/dsh-skill": "*" },
-  "repository": { "type": "git", "url": "git+https://github.com/feely0208/dsh-pdf-kit.git" },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-pdf-kit": "./bin/cli.mjs"
+  },
+  "engines": {
+    "dsh": ">=0.1.0-rc.6 <0.3.0",
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "dependencies": {
+    "@deepwhale-cn/dsh-guard-core": "^0.5.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-skill": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/feely0208/dsh-pdf-kit.git"
+  },
   "homepage": "https://www.deepwhale.org.cn/skills.html",
-  "bugs": { "url": "https://github.com/feely0208/dsh-pdf-kit/issues" }
+  "bugs": {
+    "url": "https://github.com/feely0208/dsh-pdf-kit/issues"
+  }
 }
