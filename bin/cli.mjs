@@ -13,11 +13,13 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, statSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync,
 } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+
+import { CloudError, ocrFile } from '../lib/cloud.mjs';
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OPS = join(PKG_ROOT, 'lib', 'pdf_ops.py');
@@ -33,11 +35,12 @@ const COMMANDS = {
   watermark: { actions: ['text'], modes: { text: 'text' } },
   'extract-text': { actions: [], modes: {} },
   'extract-images': { actions: [], modes: {} },
+  ocr: { actions: [], modes: {} },
 };
 
 const VALUE_FLAGS = new Set([
   '--input', '--out', '--n', '--quality', '--dpi', '--text',
-  '--fontsize', '--opacity', '--min-bytes',
+  '--fontsize', '--opacity', '--min-bytes', '--purpose',
 ]);
 const BOOL_FLAGS = new Set(['--json', '--demo', '--probe', '--help', '-h']);
 
@@ -87,12 +90,14 @@ function printHelp() {
   watermark       整页平铺文字水印（--text 必填，--fontsize，--opacity 0-1）
   extract-text    每页文本各导出一个 .txt（UTF-8）
   extract-images  导出页面内嵌图片（保留原始字节）
+  ocr             扫描件/图片/Office → 文字（官方 OCR，需 DEEPSEEK_API_KEY）
 
 示例：
   ${CMD_NAME} merge --input a.pdf,b.pdf --out out
   ${CMD_NAME} split every-n --n 2 --input report.pdf
   ${CMD_NAME} watermark --text "内部资料" --input a.pdf
   ${CMD_NAME} compress --quality 60 --input big.pdf
+  ${CMD_NAME} ocr --input 扫描件目录/          # 联网，按 1.5 元/千页计费
   ${CMD_NAME} --demo            # 自造样例跑完整流程，打印产物路径
 
 通用选项：
@@ -105,6 +110,7 @@ function printHelp() {
 约定：
   · 不修改输入文件；只写输出目录；同名文件自动加 -1 / -2，不覆盖。
   · 依赖 python3 + PyMuPDF；缺失时明确提示「缺什么、怎么装」。
+  · 只有 ocr 子命令会把文件发给 api.deepseek.com；其余子命令全程本地、不联网。
   · 退出码：0 成功 / 2 参数或输入错误 / 3 依赖缺失 / 4 执行失败。`);
 }
 
@@ -114,7 +120,7 @@ function parseArgs(argv) {
   const opts = {
     inputs: [], out: null, json: false, demo: false, probe: false, help: false,
     n: null, quality: null, dpi: null, text: null, fontsize: null, opacity: null,
-    minBytes: null, positionals: [],
+    minBytes: null, purpose: null, positionals: [],
   };
   for (let i = 0; i < argv.length; i += 1) {
     const raw = argv[i];
@@ -152,6 +158,7 @@ function parseArgs(argv) {
         case '--fontsize': opts.fontsize = value; break;
         case '--opacity': opts.opacity = value; break;
         case '--min-bytes': opts.minBytes = value; break;
+        case '--purpose': opts.purpose = value; break;
         default: break;
       }
       continue;
@@ -264,7 +271,7 @@ function unwrap(result, step, json) {
 
 const PDF_EXT = '.pdf';
 
-function collectInputs(opts, json) {
+function collectInputs(opts, json, exts = new Set([PDF_EXT])) {
   const seen = new Set();
   const files = [];
   for (const raw of opts.inputs) {
@@ -280,15 +287,15 @@ function collectInputs(opts, json) {
     const st = statSync(abs);
     if (st.isDirectory()) {
       const entries = readdirSync(abs)
-        .filter((f) => extname(f).toLowerCase() === PDF_EXT)
+        .filter((f) => exts.has(extname(f).toLowerCase()))
         .filter((f) => {
           const full = join(abs, f);
           try { return statSync(full).isFile(); } catch { return false; }
         })
         .sort((a, b) => a.localeCompare(b, 'zh-CN'));
       if (entries.length === 0) {
-        fail(`目录里没有 PDF 文件：${raw}`, {
-          code: 2, json, hint: '把 PDF 放进该目录，或直接传文件路径', extra: { input: raw },
+        fail(`目录里没有可处理的文件：${raw}`, {
+          code: 2, json, hint: `支持的扩展名：${[...exts].join(' ')}`, extra: { input: raw },
         });
       }
       for (const f of entries) {
@@ -296,9 +303,9 @@ function collectInputs(opts, json) {
         if (!seen.has(full)) { seen.add(full); files.push(full); }
       }
     } else if (st.isFile()) {
-      if (extname(abs).toLowerCase() !== PDF_EXT) {
-        fail(`不是 PDF 文件：${raw}`, {
-          code: 2, json, hint: '本工具只处理 .pdf；其它格式请先转换', extra: { input: raw },
+      if (!exts.has(extname(abs).toLowerCase())) {
+        fail(`不支持的文件类型：${raw}`, {
+          code: 2, json, hint: `支持的扩展名：${[...exts].join(' ')}`, extra: { input: raw },
         });
       }
       if (!seen.has(abs)) { seen.add(abs); files.push(abs); }
@@ -401,6 +408,71 @@ function runDemo(opts) {
 
 // ------------------------------------------------------------------ 主流程
 
+
+// ------------------------------------------------------------------ 云端 OCR
+
+const OCR_EXTS = new Set([
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff',
+]);
+
+function uniquePath(outDir, stem, ext) {
+  let cand = join(outDir, `${stem}${ext}`);
+  let i = 1;
+  while (existsSync(cand)) { cand = join(outDir, `${stem}-${i}${ext}`); i += 1; }
+  return cand;
+}
+
+function runOcr(opts) {
+  const purpose = opts.purpose || 'text_recognition';
+  if (!['text_recognition', 'rich_layout_recognition'].includes(purpose)) {
+    fail(`--purpose 只支持 text_recognition / rich_layout_recognition，收到：${purpose}`, { code: 2, json: opts.json });
+  }
+  const files = collectInputs(opts, opts.json, OCR_EXTS);
+  const outDir = defaultOutDir(files, opts);
+  ensureDir(outDir, opts.json);
+
+  (async () => {
+    const outputs = [];
+    let pages = 0;
+    let chars = 0;
+    for (const file of files) {
+      try {
+        const r = await ocrFile(file, { purpose });
+        const parts = (r.pages || []).map((p) => p.text || '');
+        const body = parts.join('\n\n');
+        const out = uniquePath(outDir, `${stemOf(file)}.ocr`, '.txt');
+        writeFileSync(out, body, 'utf8');
+        pages += r.page_count ?? parts.length;
+        chars += body.length;
+        outputs.push({
+          input: file, output: out, pages: r.page_count ?? parts.length,
+          chars: body.length, usage: r.usage || null,
+        });
+        if (!opts.json) {
+          console.log(`  ✅ ${basename(file)} · ${r.page_count ?? parts.length} 页 · ${body.length} 字 → ${out}`);
+        }
+      } catch (e) {
+        if (e instanceof CloudError) {
+          fail(e.message, { code: e.code, hint: e.hint, json: opts.json, extra: { input: file, ...e.extra } });
+        }
+        fail(`OCR 执行失败：${e?.message || e}`, { code: 4, json: opts.json, extra: { input: file } });
+      }
+    }
+    const cost = Number((pages * 1.5 / 1000).toFixed(4));
+    if (opts.json) {
+      console.log(JSON.stringify({
+        ok: true, command: 'ocr', purpose, outDir,
+        files: files.length, pages, chars, costYuan: cost, outputs,
+      }));
+    } else {
+      console.log('');
+      console.log(`✅ OCR 完成：${files.length} 个文件 · ${pages} 页 · 约 ${cost} 元（官方 1.5 元/千页）`);
+      console.log(`  输出：${outDir}`);
+    }
+  })().catch((e) => fail(`OCR 执行失败：${e?.message || e}`, { code: 4, json: opts.json }));
+}
+
 function main() {
   const argv = process.argv.slice(2);
   if (argv.length === 0) {
@@ -468,6 +540,8 @@ function main() {
       hint: `例如：${CMD_NAME} ${cmd} --input <文件或目录>\n或先跑 ${CMD_NAME} --demo 看效果`,
     });
   }
+
+  if (cmd === 'ocr') { runOcr(opts); return; }
 
   // 选项校验
   const intOpt = (name, raw, min, max, dflt) => {

@@ -184,6 +184,12 @@ $CLI split --input "$SRC/a.pdf" --n 0 >/dev/null 2>&1
 AFTER=$($PY -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$SRC/a.pdf" 2>/dev/null)
 [ "$BEFORE" = "$AFTER" ] && ok "全流程结束后输入文件哈希不变" || bad "输入文件被改动"
 
+# ---------------------------------------------------------------- 云端 OCR（本地 mock，不出网）
+echo ""
+echo "  【ocr 官方接口（本地 mock）】"
+node tests/cloud.test.mjs > "$TMP/cloud.log" 2>&1
+if [ $? -eq 0 ]; then ok "ocr：成功出 txt + 缺 Key 反例"; else bad "ocr 测试失败"; cat "$TMP/cloud.log"; fi
+
 echo ""
 echo "  ────────────────────────────────────────────────"
 echo "  通过 $PASS · 失败 $FAIL"

@@ -94,3 +94,21 @@ bash tests/run.sh
 ## License
 
 MIT © 温州深鲸智能科技有限公司
+
+
+## 扫描件 OCR（可选，联网）
+
+本地 `extract-text` 对纯文字 PDF 够用，但扫描件（图片型 PDF）抽不出字。这时用 `ocr` 子命令，
+把文件交给 DeepSeek 官方 OCR 接口逐页识别：
+
+```sh
+export DEEPSEEK_API_KEY=sk-...      # platform.deepseek.com 申请
+dsh-pdf-kit ocr --input 扫描件目录/ --out out
+```
+
+- 支持：PDF / DOC / DOCX / PPT / PPTX / PNG / JPG / WEBP / GIF / BMP / TIFF
+- 限制（官方）：单文件 ≤ 100 MiB、≤ 1000 页、识别总时长 ≤ 180 秒
+- 计费：1.5 元 / 千页，按识别成功的页数计；跑完会打印本次页数与估算费用
+- 输出：每个文件一个 `<原名>.ocr.txt`，页与页之间空行分隔
+- `--purpose rich_layout_recognition` 可保留版面标记（`<|ref|>`/`<|box|>` 与坐标）
+- **只有 `ocr` 会联网**；merge / split / compress / watermark / extract-* 全程本地
